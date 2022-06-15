@@ -1,0 +1,74 @@
+---
+  title: "JMML: scRNAseq surface marker"
+author: "by Alex"
+output: 
+  html_document:
+  toc: TRUE
+toc_float: FALSE
+editor_options: 
+  chunk_output_type: console
+---
+  
+  
+  <style type="text/css">
+  .main-container {
+    max-width: 1800px;
+    margin-left: 20px;
+    margin-right: auto;
+  }
+.toc-content {
+  max-width: 1800px;
+  margin-left: 50px;
+  margin-right: auto;
+}
+
+div {
+  
+  margin-left: 20px;
+}
+
+
+hr.new1 {
+  border-top: 1px solid #84a8e0;
+}
+
+
+
+</style>
+  
+  # Results {.tabset}
+  
+  
+  <div style="background-color: #f0f5c1;">
+  
+  
+  </div>
+  
+  <hr>
+  
+  
+  
+```{r setup, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, include = FALSE , cache.lazy = FALSE )
+
+library ( dplyr)
+library(scales)
+library("RColorBrewer")
+library("ggplot2")
+library(gplots)
+library(ggrepel)
+library(Hmisc)
+library(stringr)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library ( openxlsx)
+library ( ggbeeswarm )
+library( Seurat )
+
+options(scipen=999)
+getPalette = colorRampPalette(brewer.pal(9, "Set1")) # expand color pallete
+
+
+
+```
