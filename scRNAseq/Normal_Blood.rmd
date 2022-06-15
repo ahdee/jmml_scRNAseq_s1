@@ -73,6 +73,12 @@ getPalette = colorRampPalette(brewer.pal(9, "Set1")) # expand color pallete
 
 
 ```{r}
+
+# after preprocessing and merging will be stored here
+preprocessed_dir = "/projects/lab.mis/elliot/JMML_project1/pre_processed/"
+dir.create ( preprocessed_dir )
+filename = paste0(preprocessed_dir, "HTAN.rds" )
+
 # there are 5 samples 
 raw_dir = "/projects/lab.mis/elliot/JMML_project1/raw/HTAN/scRNAseq/raw/"
 samples = list.dirs(raw_dir)
@@ -85,16 +91,23 @@ for ( s in samples ){
 }
 
 ```
-
+ 
 ```{r}
 mt_cut = 15 
 nfeature_min = 200 
-nfeature_max = 2600
+nfeature_max = 4000
 
 
 ```
 
-# pre-processing workflow
+# Summary {.tabset}
+
+  * The goal of this is to prepare normal blood sample from, 
+  * There are 5 samples that we downloaded from the HTAN website
+  * Prepocess and QC, filter out low quality cells. 
+  * Mereged all samples to be use downstream. 
+
+## pre-processing workflow {.tabset}
 
   * The steps below encompass the standard pre-processing workflow based on Seurat's Basic recommendations. However some paremeters might be tweaked for the specific experiments. 
 
@@ -110,20 +123,26 @@ nfeature_max = 2600
       ++ We use the set of all genes starting with `MT-` as a set of mitochondrial genes
 
 ```{r}
+
 # preprocess each of the samples 
+# each sample will be store din a list 
 
-mt_cut = 15 
-nfeature_min = 200 
-nfeature_max = 2600
+slist = list () # each sample will be store in this list to be merged later. 
+preplots = list()
+normal_df$before_preprocess = 1
+normal_df$after_preprocess = 1
 
 
-r=1 
+
+for ( r in 1:nrow ( normal_df) ){
+
+# r=1 
 pid = normal_df[r:r, ]
-
+id = pid$pid
 # Load the data
 data <- Read10X(data.dir = pid$dir )
 # Initialize the Seurat object with the raw (non-normalized data).
-pbmc <- CreateSeuratObject(counts = data, project = "JMML_s1", min.cells = 3, min.features = 200)
+pbmc <- CreateSeuratObject(counts = data, project = pid$pid, min.cells = 3, min.features = 200)
 # add mitochondria percent 
 pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
 head(pbmc@meta.data, 5)
@@ -136,6 +155,7 @@ nfeature_plot <- plot_hist_perc ( pbmc@meta.data, plot_this="nFeature_RNA", ccc=
                                   , binwidth=200, y=.02  # y is the position of annotated text
                                   ) 
 
+preplots[[id]][["hist"]] <- (  ( mt_plot + ggtitle(pid$pid) ) / nfeature_plot )
 
 # quantile ( pbmc@meta.data$percent.mt) # here we see that 50% of the cells will be removed if MT is set to 10% 
 # quantile ( pbmc@meta.data$nFeature_RNA) # 25% will be removed if the high end is set to 2500 
@@ -148,14 +168,46 @@ before_total = length ( Cells(pbmc) )
 
 # after 
 pbmc =  subset(pbmc, subset = nFeature_RNA > nfeature_min & nFeature_RNA < nfeature_max & percent.mt < mt_cut )
-after_length ( Cells(pbmc) )
+after_total = length ( Cells(pbmc) )
 after_plot = VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, cols="#526E9F")
 
 
-(before + ggtitle(pid) ) / after 
+preplots[[id]][["befor_after"]]  =  (before_plot  ) / after_plot 
 
+normal_df[r, ]$before_preprocess = before_total
+normal_df[r, ]$after_preprocess = after_total
 
+# save seurat object
+slist[[id]] = pbmc
+
+print ( paste ( "completed", id ))  
+}
 
 
 ```
+
+### tabulate. 
+
+  * before and after shows how many cells were kept after preprocessing. 
+
+
+```{r fig=TRUE,fig.width=16, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
+temp = normal_df 
+temp$dir = NULL 
+
+kable( temp, format = "html" , row.names = F, caption = "Samples" ) %>% kable_classic(full_width = F, position = "center")
+
+```
+
+
+```{r fig=TRUE,fig.width=8, fig.height=8, echo=FALSE, include=TRUE, results='asis' }
+
+for ( n in names ( preplots)){
+  cat ( "### ", n, "\n\n"  )
+  print ( ( preplots[[n]]$hist)  |  (preplots[[n]]$befor_after ))
+  cat ( '\n\n')
+}
+
+```
+
 
