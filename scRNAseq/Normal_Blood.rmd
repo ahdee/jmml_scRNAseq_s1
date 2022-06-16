@@ -1,5 +1,5 @@
 ---
-  title: "JMML: scRNAseq surface marker"
+title: "JMML: scRNAseq surface marker"
 author: "by Alex"
 output: 
   html_document:
@@ -65,9 +65,11 @@ library(kableExtra)
 library ( openxlsx)
 library ( ggbeeswarm )
 library(Seurat)
+library ( HGNChelper )
 
 options(scipen=999)
 getPalette = colorRampPalette(brewer.pal(9, "Set1")) # expand color pallete
+source ( "accessory.R")
 
 ```
 
@@ -102,25 +104,29 @@ nfeature_max = 4000
 
 # Summary {.tabset}
 
-  * The goal of this is to prepare normal blood sample from, 
+  * The goal of this is to prepare normal blood sample from, Chen et al, 2022
+    + https://www.biorxiv.org/content/10.1101/2020.12.06.413930v1
   * There are 5 samples that we downloaded from the HTAN website
-  * Prepocess and QC, filter out low quality cells. 
-  * Mereged all samples to be use downstream. 
+  * We run Prepocessing and QC to filter out low quality cells. 
+  * alls samples were merged for downstream analysis 
 
 ## pre-processing workflow {.tabset}
 
   * The steps below encompass the standard pre-processing workflow based on Seurat's Basic recommendations. However some paremeters might be tweaked for the specific experiments. 
-
-  * Cells are filtered based on 2 main factors. 
-    + cells that have unique feature counts over `nfeature_max` or less than `nfeature_min`
-      ++ Low-quality cells or empty droplets will often have very few genes
-      ++ Cell doublets or multiplets may exhibit an aberrantly high gene count
-      ++ __Thus we try to find a Goldilock range: not too low but not too high__
-
-    + cells with > `mt_cut`% ( here we set it to 12% ) mitochondrial counts. High mitochondrial indicates Low-quality / dying cells.
-      ++ Low-quality / dying cells often exhibit extensive mitochondrial contamination
-      ++ We calculate mitochondrial QC metrics with the `PercentageFeatureSet` function, which calculates the percentage of counts originating from a set of features
-      ++ We use the set of all genes starting with `MT-` as a set of mitochondrial genes
+  
+  * Cells are filtered based on 2 main factors.
+  
+    + cells that have unique feature counts over `r nfeature_max` or less than `r nfeature_min`
+    
+      - Low-quality cells or empty droplets will often have very few genes
+      -  Cell doublets or multiplets may exhibit an aberrantly high gene count
+      - __Thus we try to find a Goldilock range: not too low but not too high__
+    
+    + cells with > `r mt_cut `% mitochondrial counts. High mitochondrial indicates Low-quality / dying cells.
+    
+      -Low-quality / dying cells often exhibit extensive mitochondrial contamination
+      - We calculate mitochondrial QC metrics with the `PercentageFeatureSet` function, which calculates the percentage of counts originating from a set of features
+      - We use the set of all genes starting with `MT-` as a set of mitochondrial genes
 
 ```{r}
 
@@ -200,13 +206,94 @@ kable( temp, format = "html" , row.names = F, caption = "Samples" ) %>% kable_cl
 ```
 
 
-```{r fig=TRUE,fig.width=8, fig.height=8, echo=FALSE, include=TRUE, results='asis' }
+```{r fig=TRUE,fig.width=17, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
 
 for ( n in names ( preplots)){
   cat ( "### ", n, "\n\n"  )
   print ( ( preplots[[n]]$hist)  |  (preplots[[n]]$befor_after ))
   cat ( '\n\n')
 }
+
+```
+
+
+```{r}
+# final merging 
+
+names ( slist )
+
+
+
+
+pbmc.big <-  merge(slist[["HTA4_26" ]]
+                  , y = c(slist[["HTA4_27"]], slist[["HTA4_28"]]
+                          , slist[[ "HTA4_29" ]], slist[[ "HTA4_30" ]])
+                  
+                  , add.cell.ids = c("HTA4_26", "HTA4_27", "HTA4_28"
+                                     , "HTA4_29" , "HTA4_30"
+                                     ), project = "Normal_chen_2022")
+
+
+unique ( pbmc.big@meta.data$orig.ident)
+
+# this are the data 
+head  ( pbmc.big@assays$RNA@data[ 1:3, 1:3] )
+head ( pbmc.big@meta.data)
+cell =  pbmc.big@meta.data$orig.ident
+
+
+pbmc.big[["exp"]] <- cell
+# here we need to also correct for batch and mitochondria. Cell cycles 
+pbmc.big <- SCTransform(pbmc.big, vst.flavor = "v2", verbose = TRUE, vars.to.regress=  c("percent.mt","exp")  ) %>%
+    # ScaleData(features = rownames(pbmc)) %>%, not needed since SCTransform should had done this already 
+    # Scaled data is here pbmc.big[["SCT"]]@scale.data[1:3, 1:3 ]
+    RunPCA(npcs = 30, verbose = FALSE) %>%
+    RunUMAP(reduction = "pca", dims = 1:30, verbose = FALSE) %>%
+    FindNeighbors(reduction = "pca", dims = 1:30, verbose = FALSE) %>%
+    FindClusters(resolution = 0.7, verbose = FALSE)
+
+ DimPlot(pbmc.big, label = T, repel = T, group.by = "orig.ident") + ggtitle("Unsupervised clustering")
+
+```
+
+```{r}
+
+# auto assign 
+
+source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R"); source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R")
+db_ = "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx";
+tissue = "Immune system" # e.g. Immune system, Liver, Pancreas, Kidney, Eye, Brain
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+es.max = sctype_score(scRNAseqData = pbmc.big[["SCT"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# merge by cluster
+
+cL_resutls = do.call("rbind", lapply(unique(pbmc.big@meta.data$seurat_clusters), function(cl){
+  es.max.cl = sort(rowSums(es.max[ ,rownames(pbmc.big@meta.data[pbmc.big@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+  head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(pbmc.big@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+
+pbmc.big@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  pbmc.big@meta.data$customclassif[pbmc.big@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+DimPlot(pbmc.big, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')   
+
+
+
 
 ```
 
