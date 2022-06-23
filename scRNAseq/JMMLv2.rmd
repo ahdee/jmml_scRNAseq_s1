@@ -1,0 +1,609 @@
+---
+title: "JMML: scRNAseq surface marker PART II"
+author: "by Alex"
+output: 
+  html_document:
+  toc: TRUE
+toc_float: FALSE
+editor_options: 
+  chunk_output_type: console
+---
+
+  
+  <style type="text/css">
+  .main-container {
+    max-width: 1800px;
+    margin-left: 20px;
+    margin-right: auto;
+  }
+.toc-content {
+  max-width: 1800px;
+  margin-left: 50px;
+  margin-right: auto;
+}
+
+div {
+  
+  margin-left: 20px;
+}
+
+
+hr.new1 {
+  border-top: 1px solid #84a8e0;
+}
+
+
+
+</style>
+  
+  # Results {.tabset}
+  
+  
+  <div style="background-color: #f0f5c1;">
+  
+  
+  </div>
+  
+  <hr>
+  
+  
+  
+```{r setup, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE}
+
+########## redo after email CJ has sent brand new key and outputs. 
+## see version JMMLv2 instead.  
+
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, include = FALSE , cache.lazy = FALSE )
+
+library ( dplyr)
+library(scales)
+library("RColorBrewer")
+library("ggplot2")
+library(gplots)
+library(ggrepel)
+library(Hmisc)
+library(stringr)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library ( openxlsx)
+library ( ggbeeswarm )
+library(Seurat)
+library ( HGNChelper )
+library("randomcoloR")
+lapply(c("ggraph","igraph","tidyverse", "data.tree"), library, character.only = T)
+
+main_clrs = readRDS( "/ehome/resource/random_tools/colors_21.rds"  )
+
+
+
+options(scipen=999)
+getPalette = colorRampPalette(brewer.pal(9, "Set1")) # expand color pallete
+source ( "accessory.R")
+
+```
+
+
+```{r}
+
+# after preprocessing and merging will be stored here
+preprocessed_dir = "/projects/lab.mis/elliot/JMML_project1/pre_processed/"
+dir.create ( preprocessed_dir )
+filename = paste0(preprocessed_dir, "JMML_HTANcontrols.rds" )
+
+normalizeded_dir = "/projects/lab.mis/elliot/JMML_project1/normalized/"
+dir.create ( normalizeded_dir )
+filename_norm = paste0(normalizeded_dir, "JMML_HTANcontrols.rds" )
+
+
+hm_key = read.xlsx("https://www.dropbox.com/s/t2k0qn1u1kz2ffh/new_key.xlsx?dl=1" , sheet='Sheet1')
+hm_key = hm_key[complete.cases(hm_key), ]
+colnames ( hm_key ) <- c("pid",'upn', 'batch', 'raw')
+
+raw_dir = "/projects/lab.mis/elliot/JMML_project1/raw/scRNAseq_JMML/COUNTS2"
+raw_dirs = list.dirs(raw_dir, recursive = TRUE)
+raw_dirs = raw_dirs[ grepl ( "L*_outs", raw_dirs, ignore.case = TRUE)] # filtered was missing. 
+
+raw_df = data.frame()
+for ( s in raw_dirs ){
+  id = str_match(s, ".*\\/(L.)_outs")[, 2]
+  raw_df = rbind ( raw_df , data.frame ( set=id, dir=s))
+}
+
+
+
+decode = read.xlsx( 'https://www.dropbox.com/s/5py2r6eq1h35kpz/20220603_barcodes_patientID.xlsx?dl=1')
+# looks like jmml samples are all on L0-L3 
+decode = decode[decode$orig.ident %in% c("L0", "L1", "L2", "L3"), ]
+
+# need to rename 
+# cannot do this here because the the raw counts are literally named bm.healthdonor6 
+#decode$Patient = ifelse ( decode$Patient  == "bm.healthydonor6" ,  "HM5746" , decode$Patient   )
+
+samples = unique ( decode$Patient)
+
+# are there any missing in the decoder? 
+setdiff(hm_key$pid, samples )
+
+
+
+# read in all sets
+
+
+
+superset_raw <- list()
+
+superset_raw[["L0"]] <- CreateSeuratObject(counts = Read10X(data.dir = raw_df[1, ]$dir ) , project = 'jmml', min.cells = 3, min.features = 200)
+superset_raw[["L1"]] <- CreateSeuratObject(counts = Read10X(data.dir = raw_df[2, ]$dir ) , project = 'jmml', min.cells = 3, min.features = 200)
+superset_raw[["L2"]] <- CreateSeuratObject(counts = Read10X(data.dir = raw_df[3, ]$dir ) , project = 'jmml', min.cells = 3, min.features = 200)
+superset_raw[["L3"]] <- CreateSeuratObject(counts = Read10X(data.dir = raw_df[4, ]$dir ) , project = 'jmml', min.cells = 3, min.features = 200)
+
+
+
+
+superset = list ()
+super_raw = list()
+
+# loop through each patient and collect counts 
+
+for ( s in hm_key$pid ){
+  
+  
+  print (s)
+  set = hm_key[ hm_key$pid == s, ]$raw
+  
+  
+  temp1 = subset(superset_raw[["L0"]], cells = decode [ decode$Patient %in% s, ]$barcode  ) 
+  temp2 = subset(superset_raw[["L1"]], cells = decode [ decode$Patient %in% s, ]$barcode  ) 
+  temp3 = subset(superset_raw[["L2"]] , cells = decode [ decode$Patient %in% s, ]$barcode  ) 
+  temp4 = subset(superset_raw[["L3"]], cells = decode [ decode$Patient %in% s, ]$barcode  )
+                 
+  
+  temp1@meta.data$pid = s 
+  temp2@meta.data$pid = s 
+  temp3@meta.data$pid = s 
+  temp4@meta.data$pid = s 
+  
+  temp1@meta.data$set = "L0" 
+  temp2@meta.data$set = "L1"
+  temp3@meta.data$set = "L2" 
+  temp4@meta.data$set = "L3"
+
+  
+  superset[[s]] = merge( temp1, y= c( temp2, temp3, temp4), add.cell.ids = c ( "L0", "L1", "L2", "L3"), 
+               project = s )
+   
+  super_raw[[s]]  = subset(superset_raw[[set]], cells = decode [ decode$Patient %in% s, ]$barcode  )
+  super_raw[[s]]@meta.data$pid = s 
+  super_raw[[s]]@meta.data$orig.ident = s 
+}
+
+total_cells = data.frame()
+
+for ( s in names ( superset) ) {
+  
+  total_cells = rbind ( total_cells, data.frame ( pid = s, 
+  L0 = nrow ( superset[[s]]@meta.data[superset[[s]]@meta.data$set == "L0",   ] )
+  ,L1 = nrow ( superset[[s]]@meta.data[superset[[s]]@meta.data$set == "L1",   ] )
+  ,L2 = nrow ( superset[[s]]@meta.data[superset[[s]]@meta.data$set == "L2",   ] )
+  ,L3 = nrow ( superset[[s]]@meta.data[superset[[s]]@meta.data$set == "L3",   ] )
+  , stringsAsFactors = FALSE
+  )
+  )
+  
+}
+
+
+
+
+names ( superset)[ which ( names ( superset) %in% "bm.healthydonor6" )  ] = "HM5746"  
+names ( superset)
+
+names ( super_raw )[ which ( names ( super_raw) %in% "bm.healthydonor6" )  ] = "HM5746" 
+names ( super_raw )
+  
+total_cells = merge ( hm_key, total_cells,  by.x = "pid", by.y= 'pid', all=TRUE ) 
+
+total_cells = total_cells[ order ( total_cells$batch, total_cells$raw), ]
+
+# after sanity check clean up with just the total from the L set that has the most. 
+
+total_cells2 = reshape::melt ( total_cells , id= c( "pid", "upn", "batch", "raw"  ) )
+total_cells2 = total_cells2[ total_cells2$variable == total_cells2$raw, ]        
+colnames ( total_cells2) [ ncol(total_cells2)] = "expected"
+
+total_cells2[ total_cells2$pid == "bm.healthydonor6", ]$pid = "HM5746" 
+total_cells2[ total_cells2$pid == "HM5746", ]$upn = "healthy donor"
+
+# need to change the pid in the meta as well in the raw data objects 
+super_raw[["HM5746"]]@meta.data$pid = "HM5746"
+super_raw[["HM5746"]]@meta.data$orig.ident = "HM5746"
+total_cells2 
+
+
+
+
+```
+
+
+
+ 
+```{r}
+mt_cut = 15 
+nfeature_min = 200 
+nfeature_max = 4000
+
+
+```
+
+# Summary {.tabset}
+
+  * The goal of this is to process all the JMML samples, 15 total
+  * sameples were prepared in the Gartner collobartion with Stieglitz Lab. 
+  * there are a total of 16 sample ( 15 JMML + 1 Normal )
+    + these were pooled into 2 batches run with the 10x plateform.
+  * All 15 samples were than merged along with the 5 HTAN samples normal 
+    + normal blood sample from, Chen et al, 2022
+    + https://www.biorxiv.org/content/10.1101/2020.12.06.413930v1
+    + please see other report for more details. 
+  * All QC were independently done and Prepossessed together. 
+
+ 
+  * Raw samples were pooled into 2 batches and for reasons I do not know were separated into 4 folders L0,L1,L2,L3
+    + my guess is that "batches" refers to the library prep
+    + whereas the folders "L" refers to the lane, sequencing.  L0 and so fourth
+    + Chujing has provided the a key as well as the decoder. ( please see key for more details)
+    + other concerns,  according to the key bm.healthdonor6 isHM5746 however for unknown reasons it was labeled as such in the decoding key. 
+  
+## pre-processing and normalization workflow {.tabset}
+
+  * The steps below encompass the standard pre-processing workflow based on Seurat's Basic recommendations. However some paremeters might be tweaked for the specific experiments. 
+  
+  * Cells are filtered based on 2 main factors.
+  
+    + cells that have unique feature counts over `r nfeature_max` or less than `r nfeature_min`
+    
+      - Low-quality cells or empty droplets will often have very few genes
+      -  Cell doublets or multiplets may exhibit an aberrantly high gene count
+      - __Thus we try to find a Goldilock range: not too low but not too high__
+    
+    + cells with > `r mt_cut `% mitochondrial counts. High mitochondrial indicates Low-quality / dying cells.
+    
+      -Low-quality / dying cells often exhibit extensive mitochondrial contamination
+      - We calculate mitochondrial QC metrics with the `PercentageFeatureSet` function, which calculates the percentage of counts originating from a set of features
+      - We use the set of all genes starting with `MT-` as a set of mitochondrial genes
+
+```{r}
+
+# preprocess each of the samples 
+# each sample will be store din a list 
+
+slist = list () # each filtered sample will be store in this list to be merged later. 
+preplots = list()
+total_cells2$before_preprocess = 1
+total_cells2$after_preprocess = 1
+
+
+
+for ( id in names( super_raw) ){
+
+
+pbmc <- super_raw[[ id ]]
+# add mitochondria percent 
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+head(pbmc@meta.data, 5)
+
+# plot mitochondria 
+mt_plot <- plot_hist_perc ( pbmc@meta.data, plot_this="percent.mt", ccc="#6e9be5" , cut_here = 15, msg = "" , binwidth=5, y=.3) 
+nfeature_plot <- plot_hist_perc ( pbmc@meta.data, plot_this="nFeature_RNA", ccc="#6e9be5" 
+                                  , cut_here = c (nfeature_min,  nfeature_max)
+                                  , msg = "" 
+                                  , binwidth=200, y=.02  # y is the position of annotated text
+                                  ) 
+
+preplots[[id]][["hist"]] <- (  ( mt_plot + ggtitle(id) ) / nfeature_plot )
+
+# quantile ( pbmc@meta.data$percent.mt) # here we see that 50% of the cells will be removed if MT is set to 10% 
+# quantile ( pbmc@meta.data$nFeature_RNA) # 25% will be removed if the high end is set to 2500 
+
+
+
+# Visualize QC metrics as a violin plot
+before_plot = VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, cols="#FAF632" )
+before_total = length ( Cells(pbmc) )
+
+# after 
+pbmc =  subset(pbmc, subset = nFeature_RNA > nfeature_min & nFeature_RNA < nfeature_max & percent.mt < mt_cut )
+after_total = length ( Cells(pbmc) )
+after_plot = VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, cols="#526E9F")
+
+
+preplots[[id]][["befor_after"]]  =  (before_plot  ) / after_plot 
+
+total_cells2[total_cells2$pid ==  id, ]$before_preprocess = before_total
+total_cells2[total_cells2$pid ==  id, ]$after_preprocess = after_total
+
+# save seurat object
+slist[[id]] = pbmc
+
+print ( paste ( "completed", id ))  
+}
+
+
+```
+
+### tabulate. 
+
+  * before and after shows how many cells were kept after preprocessing. 
+  * expected column is he total raw read count and should match the before column
+
+
+```{r fig=TRUE,fig.width=16, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
+temp = total_cells2 
+temp$dir = NULL 
+
+kable( temp, format = "html" , row.names = F, caption = "Samples" ) %>% kable_classic(full_width = F, position = "center")
+
+```
+
+
+```{r fig=TRUE,fig.width=17, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
+
+for ( n in names ( preplots)){
+  cat ( "### ", n, "\n\n"  )
+  print ( ( preplots[[n]]$hist)  |  (preplots[[n]]$befor_after ))
+  cat ( '\n\n')
+}
+
+```
+
+```{r}
+# load auto annotators 
+
+# auto assign 
+
+source("../ScType/gene_sets_prepare.R")
+source("../ScType/sctype_score_.R")
+db_ = "../ScType/ScTypeDB_full.xlsx";
+tissue = "Immune system" # e.g. Immune system, Liver, Pancreas, Kidney, Eye, Brain
+
+```
+
+```{r}
+
+remerge = 0 
+# merging and then normalization takes a long time and resource so skip if its already been completed. 
+
+if ( remerge == 1 ){
+
+# final merging 
+# will also merge with the normal group prior to this 
+normal = readRDS("/projects/lab.mis/elliot/JMML_project1/pre_processed/HTAN.rds")
+normal@meta.data$pid = normal@meta.data$orig.ident # make this similar to jmml objects 
+
+
+names ( slist )
+
+
+
+n = names ( slist)
+pbmc.big <-  merge(slist[[ n[1] ]]
+                  , y = c(slist[[ n[2] ]], slist[[ n[3] ]],
+                          slist[[ n[4] ]], slist[[ n[5] ]],
+                          slist[[ n[6] ]], slist[[ n[7] ]],
+                          slist[[ n[8] ]], slist[[ n[9] ]],
+                          slist[[ n[10] ]], slist[[ n[11] ]],
+                          slist[[ n[12] ]], slist[[ n[13] ]],
+                          slist[[ n[14] ]], slist[[ n[15] ]],
+                          slist[[ n[16] ]], normal
+                          
+                          )
+                  
+                  , add.cell.ids =  c( n, "normal") , project = "JMMLp1")
+
+
+pbmc.big@meta.data$group = ifelse ( grepl ( "^HTA|^HM5746$", pbmc.big@meta.data$orig.ident ), "healthy_cntr", "jmml" )
+
+saveRDS(pbmc.big, filename  ) # we save this before normalizing 
+
+##########################################################
+### normalize now
+unique ( pbmc.big@meta.data$orig.ident)
+
+# this are the data 
+head  ( pbmc.big@assays$RNA@data[ 1:3, 1:3] )
+head ( pbmc.big@meta.data)
+cell =  pbmc.big@meta.data$orig.ident
+
+
+pbmc.big[["exp"]] <- cell
+# here we need to also correct for batch and mitochondria. Cell cycles 
+pbmc.big <- SCTransform(pbmc.big, vst.flavor = "v2", verbose = TRUE, vars.to.regress=  c("percent.mt","exp")  ) 
+# save before clustering... does'nt matter but it shoul save some space. 
+saveRDS( pbmc.big, filename_norm ) 
+} else {
+  pbmc.big = readRDS( filename_norm )
+}
+
+
+```
+
+
+
+```{r}
+
+set.seed(123)
+ pbmc.big <-    pbmc.big %>% 
+    # ScaleData(features = rownames(pbmc)) %>%, not needed since SCTransform should had done this already 
+    # Scaled data is here pbmc.big[["SCT"]]@scale.data[1:3, 1:3 ]
+    RunPCA(npcs = 30, verbose = FALSE) %>%
+    RunUMAP(reduction = "pca", dims = 1:30, verbose = FALSE) %>%
+    FindNeighbors(reduction = "pca", dims = 1:30, verbose = FALSE) %>%
+    FindClusters(resolution = 0.7, verbose = FALSE)
+ 
+ 
+
+# this is how many clusters this thing yield 
+clusters = levels ( pbmc.big )
+clusters 
+ccc_clusters = getPalette( length ( clusters) )
+
+
+DimPlot(pbmc.big, label = T, repel = T ) # plots total - default for seurat transformation is 1:30 so no need to mess with this. 
+# changing resolution does'nt seem to effect this experiment
+
+# want to visualize if there is a batch 
+
+batch_plot_pid = DimPlot(pbmc.big, label = T, repel = T, group.by = "orig.ident") + 
+  ggtitle("Unsupervised clustering")  
+
+
+batch_plot_group = DimPlot(pbmc.big, label = T, repel = T, group.by = "group") + 
+  ggtitle("Unsupervised clustering") +  scale_color_manual(values = brewer.pal(8, "Dark2") ) + theme ( legend.position = "none")
+
+```
+
+```{r}
+
+
+
+# prepare gene sets
+gs_list = gene_sets_prepare(db_, tissue)
+
+es.max = sctype_score(scRNAseqData = pbmc.big[["SCT"]]@scale.data, scaled = TRUE, 
+                      gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
+
+# merge by cluster
+
+cL_resutls = do.call("rbind", lapply(unique(pbmc.big@meta.data$seurat_clusters), function(cl){
+  es.max.cl = sort(rowSums(es.max[ ,rownames(pbmc.big@meta.data[pbmc.big@meta.data$seurat_clusters==cl, ])]), decreasing = !0)
+  head(data.frame(cluster = cl, type = names(es.max.cl), scores = es.max.cl, ncells = sum(pbmc.big@meta.data$seurat_clusters==cl)), 10)
+}))
+sctype_scores = cL_resutls %>% group_by(cluster) %>% top_n(n = 1, wt = scores)  
+
+
+# set low-confident (low ScType score) clusters to "unknown"
+sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
+print(sctype_scores[,1:3])
+
+
+pbmc.big@meta.data$customclassif = ""
+for(j in unique(sctype_scores$cluster)){
+  cl_type = sctype_scores[sctype_scores$cluster==j,]; 
+  pbmc.big@meta.data$customclassif[pbmc.big@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
+}
+
+
+
+ccc = setNames( main_clrs[ 1:length ( unique ( unique ( pbmc.big@meta.data$customclassif)) )]  
+                               , unique ( pbmc.big@meta.data$customclassif)
+                               )
+
+
+cell_type_plot = DimPlot(pbmc.big, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')    +  
+  scale_color_manual(values = ccc ) + theme( legend.position = "bottom")
+
+
+cell_type_plot
+
+cell_type_plot + ( batch_plot_group )
+
+```
+
+```{r}
+
+# detail of cell id 
+
+
+# prepare edges
+cL_resutls=cL_resutls[order(cL_resutls$cluster),]; edges = cL_resutls; edges$type = paste0(edges$type,"_",edges$cluster); edges$cluster = paste0("cluster ", edges$cluster); edges = edges[,c("cluster", "type")]; colnames(edges) = c("from", "to"); rownames(edges) <- NULL
+
+# prepare nodes
+nodes_lvl1 = sctype_scores[,c("cluster", "ncells")]; nodes_lvl1$cluster = paste0("cluster ", nodes_lvl1$cluster); nodes_lvl1$Colour = "#f1f1ef"; 
+nodes_lvl1$ord = 1; nodes_lvl1$realname = nodes_lvl1$cluster; nodes_lvl1 = as.data.frame(nodes_lvl1); nodes_lvl2 = c(); 
+ccolss= ccc_clusters
+  
+for (i in 1:length(unique(cL_resutls$cluster))){
+  dt_tmp = cL_resutls[cL_resutls$cluster == unique(cL_resutls$cluster)[i], ]; nodes_lvl2 = rbind(nodes_lvl2, data.frame(cluster = paste0(dt_tmp$type,"_",dt_tmp$cluster), ncells = dt_tmp$scores, Colour = ccolss[i], ord = 2, realname = dt_tmp$type))
+}
+
+nodes = rbind(nodes_lvl1, nodes_lvl2); nodes$ncells[nodes$ncells<1] = 1;
+files_db = openxlsx::read.xlsx(db_)[,c("cellName","shortName")]; files_db = unique(files_db); nodes = merge(nodes, files_db, all.x = T, all.y = F, by.x = "realname", by.y = "cellName", sort = F)
+nodes$shortName[is.na(nodes$shortName)] = nodes$realname[is.na(nodes$shortName)]; nodes = nodes[,c("cluster", "ncells", "Colour", "ord", "shortName", "realname")]
+
+mygraph <- graph_from_data_frame(edges, vertices=nodes)
+
+# Make the graph
+gggr<- ggraph(mygraph, layout = 'circlepack', weight=I(ncells)) + 
+  geom_node_circle(aes(filter=ord==1,fill=I("#F5F5F5"), colour=I("#D3D3D3")), alpha=0.9) + geom_node_circle(aes(filter=ord==2,fill=I(Colour), colour=I("#D3D3D3")), alpha=0.9) +
+  theme_void() + geom_node_text(aes(filter=ord==2, label=shortName, colour=I("#ffffff"), fill="white", repel = !1, parse = T, size = I(log(ncells,25)*1.5)))+ geom_node_label(aes(filter=ord==1,  label=shortName, colour=I("#000000"), size = I(3), fill="white", parse = T), repel = !0, segment.linetype="dotted")
+
+DimPlot(pbmc.big, reduction = "umap", label = TRUE, repel = TRUE, cols = ccolss) +  gggr 
+
+
+
+```
+
+
+## Visuals {.tabset}
+
+* All samples after independent QC were merged as single assay and normalized/scaled and removed unwanted variation with the `SCTransform` function. 
+* We corrected for Mitochondria content AND sample. 
+
+
+### Overall After scaling and normalization 
+
+  * sample names are colored to indicate any batch effect even after corrected
+  * Ideally we want the samples to be disperesed into multiple clusters. 
+
+```{r fig=TRUE,fig.width=10, fig.height=8, echo=FALSE, include=TRUE, results='asis' }
+batch_plot_pid
+```
+
+### Cell type
+
+  * we used an automated cell-type indentifier ScType to label and group each clusters. 
+  * Ianevski et al, 2022
+  * https://www.nature.com/articles/s41467-022-28803-w
+  
+
+```{r fig=TRUE,fig.width=18, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
+
+
+(cell_type_plot + ggtitle ( "cell type") ) + ( batch_plot_group  + ggtitle ( "groups"))
+
+
+
+```
+
+### Bubble 
+
+* shows what other cell types were considered with respect to each of the clusters 
+
+```{r fig=TRUE,fig.width=18, fig.height=20, echo=FALSE, include=TRUE, results='asis' }
+DimPlot(pbmc.big, reduction = "umap", label = TRUE, repel = TRUE, cols = ccolss) /  gggr 
+```
+
+
+### table output. 
+
+
+```{r fig=TRUE,fig.width=12, fig.height=10, echo=FALSE, include=TRUE, results='asis' }
+
+DT::datatable(cL_resutls,
+          caption = 'Cell type scores', rownames = F, 
+          class = 'cell-border stripe', 
+          filter = 'top',
+          extensions = 'Buttons',
+          fillContainer = FALSE, 
+          options = list(pageLength = 20, 
+                         autoWidth = F,
+                         dom = 'Bfrtip',
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'), 
+                         scrollX = TRUE, 
+            selection="multiple"
+          ))
+
+
+```
+
